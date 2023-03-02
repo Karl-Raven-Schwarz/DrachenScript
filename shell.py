@@ -1,8 +1,8 @@
-import basic
+import drachenScript
 
 while True:
-    text = input("basic > ")
-    result, error = basic.Run("<stdin>", text)
+    text = input("Drachen Script > ")
+    result, error = drachenScript.Run("<stdin>", text)
     
     if error: print(error.AsString())
     else: print(result)

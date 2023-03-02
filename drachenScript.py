@@ -31,6 +31,29 @@ class InvalidSyntaxError(Error):
     def __init__(self, posStart, posEnd, details=''):
         super().__init__(posStart, posEnd, 'Invalid Syntax', details)
 
+class RunTimeError(Error):
+    def __init__(self, posStart, posEnd, details, context):
+        super().__init__(posStart, posEnd, 'Run Time Error', details)
+        self.Context = context
+
+    def AsString(self):
+        result = self.GenerateTraceback()
+        result += f'File {self.ErrorName}, {self.Details}'
+        result += '\n\n' + StringWithArrows(self.PosStart.FileTxt, self.PosStart, self.PosEnd)
+        return result
+
+    def GenerateTraceback(self):
+        result = ''
+        position = self.PosStart
+        context = self.Context
+
+        while context:
+            result = f' File {position.FileName}, line {str(position.Line + 1)}, in {context.DisplayName} \n' + result
+            position = context.ParentEntryPosition
+            context = context.Parent
+        
+        return 'Traceback (most recent call last):\n' + result
+
 '''
     POSITION
 '''
@@ -66,6 +89,7 @@ TT_PLUS = 'PLUS'
 TT_MINUS = 'MINUS'
 TT_MUL = 'MUL'
 TT_DIV = 'DIV'
+TT_POW = 'POW'
 TT_LPAREN = 'LPAREN'
 TT_RPAREN = 'RPAREN'
 TT_EOF = 'EOF'
@@ -129,6 +153,10 @@ class Lexer:
                 tokens.append(Token(TT_DIV, posStart=self.Position))
                 self.Advance()
 
+            elif self.CurrentChar == '^':
+                tokens.append(Token(TT_POW, posStart=self.Position))
+                self.Advance()
+
             elif self.CurrentChar == '(':
                 tokens.append(Token(TT_LPAREN, posStart=self.Position))
                 self.Advance()
@@ -172,6 +200,9 @@ class NumberNode:
     def __init__(self, token):
         self.Token = token
 
+        self.PosStart = self.Token.PosStart
+        self.PosEnd = self.Token.PosEnd
+
     def __repr__(self):
         return f'{self.Token}'
 
@@ -182,6 +213,9 @@ class BinOperatorNode:
         self.OperatorToken = operatorToken
         self.RightNode = rightNode
 
+        self.PosStart = self.LeftNode.PosStart
+        self.PosEnd = self.RightNode.PosEnd
+
     def __repr__(self):
         return f'({self.LeftNode}, {self.OperatorToken}, {self.RightNode})'
 
@@ -190,6 +224,9 @@ class UnaryOperatorNode:
     def __init__(self, operatorToken, node):
         self.OperatorToken = operatorToken
         self.Node = node
+
+        self.PosStart = self.OperatorToken.PosStart
+        self.PosEnd = node.PosEnd
 
     def __repr__(self):
         return f'({self.OperatorToken}, {self.Node})'
@@ -243,17 +280,11 @@ class Parser:
             ))
         return result
 
-    def Factor(self):
+    def Atom(self):
         result = ParseResult()
         token = self.CurrentToken
 
-        if token.Type in (TT_PLUS, TT_MINUS):
-            result.Register(self.Advance())
-            factor = result.Register(self.Factor())
-            if result.Error: return result
-            return result.Success(UnaryOperatorNode(token, factor))
-		
-        elif token.Type in (TT_INT, TT_FLOAT):
+        if token.Type in (TT_INT, TT_FLOAT):
             result.Register(self.Advance())
             return result.Success(NumberNode(token))
 
@@ -269,11 +300,26 @@ class Parser:
                     self.CurrentToken.PosStart, self.CurrentToken.PosEnd,
                     "Expected ')'"
                 ))
-
+        
         return result.Failure(InvalidSyntaxError(
             token.PosStart, token.PosEnd,
-            "Expected int or float"
+            "Expected int or float, '+', '-', or '('"
         ))
+
+    def Power(self):
+        return self.BinOperator(self.Atom, (TT_POW, ), self.Factor)
+
+    def Factor(self):
+        result = ParseResult()
+        token = self.CurrentToken
+
+        if token.Type in (TT_PLUS, TT_MINUS):
+            result.Register(self.Advance())
+            factor = result.Register(self.Factor())
+            if result.Error: return result
+            return result.Success(UnaryOperatorNode(token, factor))
+
+        return self.Power()
 
     def Term(self):
         return self.BinOperator(self.Factor, (TT_MUL, TT_DIV))
@@ -281,22 +327,146 @@ class Parser:
     def Expr(self):
         return self.BinOperator(self.Term, (TT_PLUS, TT_MINUS))
 
-    def BinOperator(self, function, ops):
+    def BinOperator(self, functionOne, ops, functionTwo=None):
+        if functionTwo == None: functionTwo = functionOne
         result = ParseResult()
-        left = result.Register(function())
+        left = result.Register(functionOne())
 
         if result.Error: return result
 
         while self.CurrentToken.Type in ops:
             operatorToken = self.CurrentToken
             result.Register(self.Advance())
-            right = result.Register(function())
+            right = result.Register(functionTwo())
 
             if result.Error: return result
 
             left = BinOperatorNode(left, operatorToken, right)
 
         return result.Success(left)
+
+'''
+    RUN TIME RESULT
+'''
+
+class RunTimeResult:
+    
+    def __init__(self):
+        self.Value = None
+        self.Error = None
+    
+    def Register(self, result):
+        if result.Error: self.Error = result.Error
+        return result.Value
+    
+    def Success(self, value):
+        self.Value = value
+        return self
+    
+    def Failure(self, error):
+        self.Error = error
+        return self
+
+'''
+    VALUES
+'''
+
+class Number:
+
+    def __init__(self, value):
+        self.Value = value
+        self.SetPosition()
+
+    def SetPosition(self, posStart=None, posEnd=None):
+        self.PosStart = posStart
+        self.PosEnd = posEnd
+        return self
+    
+    def SetContext(self, context=None):
+        self.Context = context
+        return self
+
+    def AddedTo(self, other): 
+        if isinstance(other, Number):
+            return Number(self.Value + other.Value).SetContext(self.Context), None
+        
+    def SubbedBy(self, other):
+        if isinstance(other, Number):
+            return Number(self.Value - other.Value).SetContext(self.Context), None
+        
+    def MultedBy(self, other):
+        if isinstance(other, Number):
+            return Number(self.Value * other.Value).SetContext(self.Context), None
+        
+    def DivedBy(self, other):
+        if isinstance(other, Number):
+            if other.Value == 0: return None, RunTimeError(
+                    other.PosStart, other.PosEnd, "Division by zero '0'", self.Context
+            )
+            return Number(self.Value / other.Value).SetContext(self.Context), None
+        
+    def PowedBy(self, other):
+        if isinstance(other, Number): return Number(self.Value**other.Value).SetContext(self.Context), None
+        
+    def __repr__(self):
+        return str(self.Value)
+
+'''
+    CONTEXT
+'''
+
+class Context:
+
+    def __init__(self, displayName, parent=None, parentEntryPosition=None):
+        self.DisplayName = displayName
+        self.Parent = parent
+        self.ParentEntryPosition = parentEntryPosition
+
+'''
+    INTERPRETER
+'''
+
+class Interpreter:
+    
+    def Visit(self, node, context):
+        methodName = f'Visit{type(node).__name__}'
+        method = getattr(self, methodName, self.NoVisitMethod)
+        return method(node, context)
+    
+    def NoVisitMethod(self, node, context):
+        return Exception(f'No Visit{type(node).__name__} method define')
+        
+    def VisitNumberNode(self, node, context):
+        return RunTimeResult().Success(Number(node.Token.Value).SetContext(context).SetPosition(node.PosStart, node.PosEnd))
+
+    def VisitBinOperatorNode(self, node, context): 
+        runTimeResult = RunTimeResult()
+        left = runTimeResult.Register(self.Visit(node.LeftNode, context))
+        if runTimeResult.Error: return runTimeResult
+        right = runTimeResult.Register(self.Visit(node.RightNode, context))
+        if runTimeResult.Error: return runTimeResult
+
+        if node.OperatorToken.Type == TT_PLUS: result, error = left.AddedTo(right)
+        elif node.OperatorToken.Type == TT_MINUS: result, error = left.SubbedBy(right)
+        elif node.OperatorToken.Type == TT_MUL: result, error = left.MultedBy(right)
+        elif node.OperatorToken.Type == TT_DIV: result, error = left.DivedBy(right)
+        elif node.OperatorToken.Type == TT_POW: result, error = left.PowedBy(right)
+
+        if error: return runTimeResult.Failure(error)
+        else: return runTimeResult.Success(result.SetPosition(node.PosStart, node.PosEnd))
+        
+    def VisitUnaryOperatorNode(self, node, context):
+        runTimeError = RunTimeError()
+        number = runTimeError.Register(self.Visit(node.Node, context))
+        if runTimeError.Error: return runTimeError
+
+        error = None
+
+        if node.OperatorToken == TT_MINUS: number = number.MultedBy(Number(-1))
+
+        if error: return runTimeError.Failure(error)
+        else: return runTimeError.Success(number.SetPosition(node.PosStart, node.PosEnd))
+
 
 '''
     RUN
@@ -310,6 +480,12 @@ def Run(fileName, text):
     #generate AST
     parser= Parser(tokens)
     ast = parser.Parse()
+    if ast.Error: return None, ast.Error
 
-    return ast.Node, ast.Error
+    #run program
+    interpreter = Interpreter()
+    context = Context('<program>')
+    result = interpreter.Visit(ast.Node, context)
+
+    return result.Value, result.Error
 
