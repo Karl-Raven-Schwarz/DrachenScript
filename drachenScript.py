@@ -136,13 +136,13 @@ class Token:
 
         if posEnd: self.PosEnd = posEnd.Copy()
 
-    def __repr__(self):
-        if self.Value: return f'{self.Type}:{self.Value}'
-        return f'{self.Type}'
-
     def Matches(self, type, value):
         return self.Type == type and self.Value == value
 
+    def __repr__(self):
+        if self.Value: return f'{self.Type}:{self.Value}'
+        return f'{self.Type}'
+    
 ''''
     LEXER
 '''
@@ -564,6 +564,7 @@ class Number:
     def __init__(self, value):
         self.Value = value
         self.SetPosition()
+        self.SetContext()
 
     def SetPosition(self, posStart=None, posEnd=None):
         self.PosStart = posStart
@@ -623,15 +624,15 @@ class Number:
     def Notted(self, other):
         if isinstance(other, Number): return Number(1 if self.Value == 0 else 0).SetContext(self.Context), None
 
-    def __repr__(self):
-        return str(self.Value)
-
     def Copy(self):
         copy = Number(self.Value)
         copy.SetPosition(self.PosStart, self.PosEnd)
         copy.SetContext(self.Context)
         return copy
 
+    def __repr__(self):
+        return str(self.Value)
+    
 '''
     CONTEXT
 '''
@@ -656,7 +657,9 @@ class SymbolTable:
 
     def Get(self, name):
         value = self.Symbols.get(name, None)
+
         if value == None and self.Parent: return self.Parent.Get(name)
+
         return value
     
     def Set(self, name, value):
@@ -749,8 +752,8 @@ class Interpreter:
 
 GlobalSymbolTable = SymbolTable()
 GlobalSymbolTable.Set('null', Number(0))
-GlobalSymbolTable.Set('false', Number(0))
 GlobalSymbolTable.Set('true', Number(1))
+GlobalSymbolTable.Set('false', Number(0))
 
 def Run(fileName, text):
     lexer = Lexer(fileName, text)
