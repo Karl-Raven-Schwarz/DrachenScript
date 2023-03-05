@@ -1,16 +1,20 @@
 from stringWithArrows import *
+import string
 
 ''''
     CONSTANTS
 '''
 
 DIGITS = '0123456789'
+LETTERS = string.ascii_letters
+LETTERS_DIGITS = LETTERS + DIGITS
 
 ''''
     ERRORS
 '''
 
 class Error:
+
     def __init__(self, posStart, posEnd, errorName, details):
         self.PosStart = posStart
         self.PosEnd = posEnd
@@ -24,14 +28,22 @@ class Error:
         return result
 
 class IllegalCharError(Error):
+
     def __init__(self, posStart, posEnd, details):
         super().__init__(posStart, posEnd, 'Illegal Character', details)
 
+class ExpectedCharError(Error):
+    
+    def __init__(self, posStart, posEnd, details):
+        super().__init__(posStart, posEnd, 'Expected Character', details)
+
 class InvalidSyntaxError(Error):
+
     def __init__(self, posStart, posEnd, details=''):
         super().__init__(posStart, posEnd, 'Invalid Syntax', details)
 
 class RunTimeError(Error):
+
     def __init__(self, posStart, posEnd, details, context):
         super().__init__(posStart, posEnd, 'Run Time Error', details)
         self.Context = context
@@ -54,11 +66,14 @@ class RunTimeError(Error):
         
         return 'Traceback (most recent call last):\n' + result
 
+
+
 '''
     POSITION
 '''
 
 class Position:
+
     def __init__(self, index, line, column, fileName, fileTxt):
         self.Index = index
         self.Line = line
@@ -92,9 +107,24 @@ TT_DIV = 'DIV'
 TT_POW = 'POW'
 TT_LPAREN = 'LPAREN'
 TT_RPAREN = 'RPAREN'
-TT_EOF = 'EOF'
+TT_EOF = 'EOF' #    end or file
+TT_IDENTIFIER = 'IDENTIFIER'
+TT_KEYWORD = 'KEYWORD'
+TT_EQUAL = 'EQUAL'
+#   logical operators
+TT_EE = 'EE'
+TT_NE = 'NE'
+TT_LT = 'LT'
+TT_GT = 'GT'
+TT_LTE = 'LTE'
+TT_GTE = 'GTE'
+
+KEYWORDS = [
+    'var', 'and', 'or', 'not'
+]
 
 class Token:
+
     def __init__(self, type, value=None, posStart=None, posEnd=None):
         self.Type = type
         self.Value = value
@@ -104,11 +134,14 @@ class Token:
             self.PosEnd = posStart.Copy()
             self.PosEnd.Advance()
 
-        if posEnd: self.PosEnd = posEnd
+        if posEnd: self.PosEnd = posEnd.Copy()
 
     def __repr__(self):
         if self.Value: return f'{self.Type}:{self.Value}'
         return f'{self.Type}'
+
+    def Matches(self, type, value):
+        return self.Type == type and self.Value == value
 
 ''''
     LEXER
@@ -137,6 +170,9 @@ class Lexer:
             elif self.CurrentChar in DIGITS:
                 tokens.append(self.MakeNumber())
 
+            elif self.CurrentChar in LETTERS:
+                tokens.append(self.MakeIdentifier())
+
             elif self.CurrentChar == '+':
                 tokens.append(Token(TT_PLUS, posStart=self.Position))
                 self.Advance()
@@ -164,7 +200,19 @@ class Lexer:
             elif self.CurrentChar == ')':
                 tokens.append(Token(TT_RPAREN, posStart=self.Position))
                 self.Advance()
-            
+
+            elif self.CurrentChar == '!':
+                token, error = self.MakeNotEquals()
+                if error: return [], error
+                tokens.append(token)
+
+            elif self.CurrentChar == '=':
+                tokens.append(self.MakeEquals())
+            elif self.CurrentChar == '<':
+                tokens.append(self.MakeLessThan())
+            elif self.CurrentChar == '>':
+                tokens.append(self.MakeGreaterThan())
+
             else: 
                 posStart = self.Position.Copy()
                 char = self.CurrentChar
@@ -191,6 +239,61 @@ class Lexer:
 
         else: return Token(TT_FLOAT, float(NumStr), posStart, self.Position)
 
+    def MakeIdentifier(self):
+        idStr = ''
+        posStart = self.Position.Copy()
+
+        while self.CurrentChar != None and self.CurrentChar in LETTERS_DIGITS + '_':
+            idStr += self.CurrentChar
+            self.Advance()
+        
+        tokenType = TT_KEYWORD if idStr in KEYWORDS else TT_IDENTIFIER
+        return Token(tokenType, idStr, posStart, self.Position)
+
+    def MakeNotEquals(self):
+        posStart = self.Position.Copy()
+        self.Advance()
+
+        if self.CurrentChar == '=':
+            self.Advance()
+            return Token(TT_NE, posStart=posStart, posEnd=self.Position), None
+        
+        self.Advance()
+        return None, ExpectedCharError(posStart, self.Position, "'=' (after '!')")
+    
+    def MakeEquals(self):
+        tokenType = TT_EQUAL
+        posStart = self.Position.Copy()
+        self.Advance()
+
+        if self.CurrentChar == '=':
+            self.Advance()
+            tokenType == TT_EE
+
+        return Token(tokenType, posStart=posStart, posEnd=self.Position)
+    
+    def MakeLessThan(self):
+        tokenType = TT_LT
+        posStart = self.Position.Copy()
+        self.Advance()
+
+        if self.CurrentChar == '=':
+            self.Advance()
+            tokenType == TT_LT
+
+        return Token(tokenType, posStart=posStart, posEnd=self.Position)
+    
+    def MakeGreaterThan(self):
+        tokenType = TT_GT
+        posStart = self.Position.Copy()
+        self.Advance()
+
+        if self.CurrentChar == '=':
+            self.Advance()
+            tokenType == TT_GT
+
+        return Token(tokenType, posStart=posStart, posEnd=self.Position)
+
 '''
     NODES
 '''
@@ -205,6 +308,21 @@ class NumberNode:
 
     def __repr__(self):
         return f'{self.Token}'
+
+class VarAccessNode:
+    
+    def __init__(self, varNameToken):
+        self.VarNameToken = varNameToken
+        self.PosStart = self.VarNameToken.PosStart
+        self.PosEnd = self.VarNameToken.PosEnd
+
+class VarAssingNode:
+
+    def __init__(self, varNameToken, valueNode):
+        self.VarNameToken = varNameToken
+        self.ValueNode = valueNode
+        self.PosStart = self.VarNameToken.PosStart
+        self.PosEnd = self.VarNameToken.PosEnd
 
 class BinOperatorNode:
 
@@ -240,19 +358,23 @@ class ParseResult:
     def __init__(self):
         self.Error = None
         self.Node = None
+        self.AdvanceCount = 0
+
+    def RegisterAdvancement(self):
+        self.AdvanceCount += 1
 
     def Register(self, result):
-        if isinstance(result, ParseResult):
-            if result.Error: self.Error = result.Error
-            return result.Node
-        return result
+        self.AdvanceCount += result.AdvanceCount
+        if result.Error: self.Error = result.Error
+        return result.Node
 
     def Success(self, node):
         self.Node = node
         return self
 
     def Failure(self, error):
-        self.Error = error
+        if not self.Error or self.AdvanceCount == 0:
+            self.Error = error
         return self
 
 '''
@@ -285,25 +407,31 @@ class Parser:
         token = self.CurrentToken
 
         if token.Type in (TT_INT, TT_FLOAT):
-            result.Register(self.Advance())
+            result.RegisterAdvancement()
+            self.Advance()
             return result.Success(NumberNode(token))
+        
+        elif token.Type == TT_IDENTIFIER:
+            result.RegisterAdvancement()
+            self.Advance()
+            return result.Success(VarAccessNode(token))
 
         elif token.Type == TT_LPAREN:
-            result.Register(self.Advance())
+            result.RegisterAdvancement()
+            self.Advance()
             expr = result.Register(self.Expr())
             if result.Error: return result
             if self.CurrentToken.Type == TT_RPAREN:
-                result.Register(self.Advance())
+                result.RegisterAdvancement()
+                self.Advance()
                 return result.Success(expr)
             else:
                 return result.Failure(InvalidSyntaxError(
-                    self.CurrentToken.PosStart, self.CurrentToken.PosEnd,
-                    "Expected ')'"
+                    self.CurrentToken.PosStart, self.CurrentToken.PosEnd, "Expected ')'"
                 ))
         
         return result.Failure(InvalidSyntaxError(
-            token.PosStart, token.PosEnd,
-            "Expected int or float, '+', '-', or '('"
+            token.PosStart, token.PosEnd, "Expected int, float, identifier, '+', '-', or '('"
         ))
 
     def Power(self):
@@ -314,7 +442,8 @@ class Parser:
         token = self.CurrentToken
 
         if token.Type in (TT_PLUS, TT_MINUS):
-            result.Register(self.Advance())
+            result.RegisterAdvancement()
+            self.Advance()
             factor = result.Register(self.Factor())
             if result.Error: return result
             return result.Success(UnaryOperatorNode(token, factor))
@@ -324,8 +453,64 @@ class Parser:
     def Term(self):
         return self.BinOperator(self.Factor, (TT_MUL, TT_DIV))
 
-    def Expr(self):
+    def ArithExpr(self):
         return self.BinOperator(self.Term, (TT_PLUS, TT_MINUS))
+
+    def ComparisonExpr(self):
+        result = ParseResult()
+
+        if self.CurrentToken.Matches(TT_KEYWORD, 'not'):
+            operatorToken = self.CurrentToken
+            result.RegisterAdvancement()
+            self.Advance()
+            node = result.Register(self.ComparisonExpr())
+
+            if result.Error: return result
+
+            return result.Success(UnaryOperatorNode(operatorToken, node))
+        
+        node = result.Register(self.BinOperator(self.ArithExpr, (TT_EE, TT_NE, TT_LT, TT_GT, TT_LTE, TT_GTE)))
+
+        if result.Error: return result.Failure(InvalidSyntaxError(
+                self.CurrentToken.PosStart, self.CurrentToken.PosEnd, "Expected int, float, identifier, '+', '-', '(', 'not')"
+        ))
+
+    def Expr(self):
+        result = ParseResult()
+
+        if self.CurrentToken.Matches(TT_KEYWORD, 'var'): 
+            result.RegisterAdvancement()
+            self.Advance()
+
+            if self.CurrentToken.Type != TT_IDENTIFIER:
+                return result.Failure(InvalidSyntaxError(
+                    self.CurrentToken.PosStart, self.CurrentToken.PosEnd, 'Expected Identifier'
+                ))
+            
+            varName = self.CurrentToken
+            result.RegisterAdvancement()
+            self.Advance()
+
+            if self.CurrentToken.Type != TT_EQUAL:
+                return result.Failure(InvalidSyntaxError(
+                    self.CurrentToken.PosStart, self.CurrentToken.PosEnd, "Expected '='"
+                ))
+            
+            result.RegisterAdvancement()
+            self.Advance()
+            expr = result.Register(self.Expr())
+
+            if result.Error : return result
+
+            return result.Success(VarAssingNode(varName, expr))
+
+        node = result.Register(self.BinOperator(self.ComparisonExpr, ((TT_KEYWORD, 'and'), (TT_KEYWORD, 'or'))))
+
+        if result.Error: return result.Failure(InvalidSyntaxError(
+                self.CurrentToken.PosStart, self.CurrentToken.PosEnd,"Expected 'VAR', int, float, identifier, '+', '-', or '('"
+                ))
+        
+        return result.Success(node)
 
     def BinOperator(self, functionOne, ops, functionTwo=None):
         if functionTwo == None: functionTwo = functionOne
@@ -334,9 +519,10 @@ class Parser:
 
         if result.Error: return result
 
-        while self.CurrentToken.Type in ops:
+        while self.CurrentToken.Type in ops or (self.CurrentToken.Type, self.CurrentToken.Value) in ops:
             operatorToken = self.CurrentToken
-            result.Register(self.Advance())
+            result.RegisterAdvancement()
+            self.Advance()
             right = result.Register(functionTwo())
 
             if result.Error: return result
@@ -411,6 +597,12 @@ class Number:
     def __repr__(self):
         return str(self.Value)
 
+    def Copy(self):
+        copy = Number(self.Value)
+        copy.SetPosition(self.PosStart, self.PosEnd)
+        copy.SetContext(self.Context)
+        return copy
+
 '''
     CONTEXT
 '''
@@ -421,6 +613,28 @@ class Context:
         self.DisplayName = displayName
         self.Parent = parent
         self.ParentEntryPosition = parentEntryPosition
+        self.SymbolTable = None
+
+'''
+    SYMBOL TABLE
+'''
+
+class SymbolTable:
+
+    def __init__(self):
+        self.Symbols = {}
+        self.Parent = None
+
+    def Get(self, name):
+        value = self.Symbols.get(name, None)
+        if value == None and self.Parent: return self.Parent.Get(name)
+        return value
+    
+    def Set(self, name, value):
+        self.Symbols[name] = value
+
+    def Remove(self, name):
+        del self.Symbols[name]
 
 '''
     INTERPRETER
@@ -439,6 +653,28 @@ class Interpreter:
     def VisitNumberNode(self, node, context):
         return RunTimeResult().Success(Number(node.Token.Value).SetContext(context).SetPosition(node.PosStart, node.PosEnd))
 
+    def VisitVarAccessNode(self, node, context):
+        result = RunTimeResult()
+        varName = node.VarNameToken.Value
+        value = context.SymbolTable.Get(varName)
+
+        if not value: return result.Failure(RunTimeError(                
+                node.PosStart, node.PosEnd, f"'{varName}' is not defined", context       
+        ))
+        value = value.Copy().SetPosition(node.PosStart, node.PosEnd)
+        return result.Success(value)
+    
+    def VisitVarAssingNode(self, node, context):
+        result = RunTimeResult()
+        varName = node.VarNameToken.Value
+        value = result.Register(self.Visit(node.ValueNode, context))
+        
+        if result.Error: return result
+
+        context.SymbolTable.Set(varName, value)
+
+        return result.Success(value)
+
     def VisitBinOperatorNode(self, node, context): 
         runTimeResult = RunTimeResult()
         left = runTimeResult.Register(self.Visit(node.LeftNode, context))
@@ -451,6 +687,15 @@ class Interpreter:
         elif node.OperatorToken.Type == TT_MUL: result, error = left.MultedBy(right)
         elif node.OperatorToken.Type == TT_DIV: result, error = left.DivedBy(right)
         elif node.OperatorToken.Type == TT_POW: result, error = left.PowedBy(right)
+        #   comparison
+        elif node.OperatorToken.Type == TT_EE: result, error = left.ComparisonEq(right)
+        elif node.OperatorToken.Type == TT_NE: result, error = left.ComparisonNE(right)
+        elif node.OperatorToken.Type == TT_LT: result, error = left.ComparisonLT(right)
+        elif node.OperatorToken.Type == TT_GT: result, error = left.ComparisonGT(right)
+        elif node.OperatorToken.Type == TT_LTE: result, error = left.ComparisonLTE(right)
+        elif node.OperatorToken.Type == TT_GTE: result, error = left.ComparisonGTE(right)
+        elif node.OperatorToken.Matches(TT_KEYWORD, 'and'): result, error = left.AndedBy(right)
+        elif node.OperatorToken.Matches(TT_KEYWORD, 'or'): result, error = left.OredBy(right)
 
         if error: return runTimeResult.Failure(error)
         else: return runTimeResult.Success(result.SetPosition(node.PosStart, node.PosEnd))
@@ -472,6 +717,9 @@ class Interpreter:
     RUN
 '''
 
+GlobalSymbolTable = SymbolTable()
+GlobalSymbolTable.Set('null', Number(0))
+
 def Run(fileName, text):
     lexer = Lexer(fileName, text)
     tokens, error = lexer.MakeTokens()
@@ -485,6 +733,7 @@ def Run(fileName, text):
     #run program
     interpreter = Interpreter()
     context = Context('<program>')
+    context.SymbolTable = GlobalSymbolTable
     result = interpreter.Visit(ast.Node, context)
 
     return result.Value, result.Error
