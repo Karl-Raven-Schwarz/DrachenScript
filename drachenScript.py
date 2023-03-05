@@ -107,7 +107,7 @@ TT_DIV = 'DIV'
 TT_POW = 'POW'
 TT_LPAREN = 'LPAREN'
 TT_RPAREN = 'RPAREN'
-TT_EOF = 'EOF' #    end or file
+TT_EOF = 'EOF' #    end or final
 TT_IDENTIFIER = 'IDENTIFIER'
 TT_KEYWORD = 'KEYWORD'
 TT_EQUAL = 'EQUAL'
@@ -268,7 +268,7 @@ class Lexer:
 
         if self.CurrentChar == '=':
             self.Advance()
-            tokenType == TT_EE
+            tokenType = TT_EE
 
         return Token(tokenType, posStart=posStart, posEnd=self.Position)
     
@@ -279,7 +279,7 @@ class Lexer:
 
         if self.CurrentChar == '=':
             self.Advance()
-            tokenType == TT_LT
+            tokenType = TT_LTE
 
         return Token(tokenType, posStart=posStart, posEnd=self.Position)
     
@@ -290,7 +290,7 @@ class Lexer:
 
         if self.CurrentChar == '=':
             self.Advance()
-            tokenType == TT_GT
+            tokenType = TT_GTE
 
         return Token(tokenType, posStart=posStart, posEnd=self.Position)
 
@@ -398,7 +398,7 @@ class Parser:
         result = self.Expr()
         if not result.Error and self.CurrentToken.Type != TT_EOF:
             return result.Failure(InvalidSyntaxError(
-                self.CurrentToken.PosStart, self.CurrentToken.PosEnd, "Expected '+', '-', '*' or '/'"
+                self.CurrentToken.PosStart, self.CurrentToken.PosEnd, "Expected '+', '-', '*', '/', '^', '==', '!=', '<', '>', <=', '>=', 'AND' or 'OR'"
             ))
         return result
 
@@ -474,6 +474,8 @@ class Parser:
         if result.Error: return result.Failure(InvalidSyntaxError(
                 self.CurrentToken.PosStart, self.CurrentToken.PosEnd, "Expected int, float, identifier, '+', '-', '(', 'not')"
         ))
+
+        return result.Success(node)
 
     def Expr(self):
         result = ParseResult()
@@ -593,7 +595,34 @@ class Number:
         
     def PowedBy(self, other):
         if isinstance(other, Number): return Number(self.Value**other.Value).SetContext(self.Context), None
-        
+
+    def GetComparisonEq(self, other):
+        if isinstance(other, Number): return Number(int(self.Value == other.Value)).SetContext(self.Context), None
+
+    def GetComparisonNE(self, other):
+        if isinstance(other, Number): return Number(int(self.Value != other.Value)).SetContext(self.Context), None
+
+    def GetComparisonLT(self, other):
+        if isinstance(other, Number): return Number(int(self.Value < other.Value)).SetContext(self.Context), None
+
+    def GetComparisonGT(self, other):
+        if isinstance(other, Number): return Number(int(self.Value > other.Value)).SetContext(self.Context), None
+
+    def GetComparisonLTE(self, other):
+        if isinstance(other, Number): return Number(int(self.Value <= other.Value)).SetContext(self.Context), None
+
+    def GetComparisonGTE(self, other):
+        if isinstance(other, Number): return Number(int(self.Value >= other.Value)).SetContext(self.Context), None
+
+    def AndedBy(self, other):
+        if isinstance(other, Number): return Number(int(self.Value and other.Value)).SetContext(self.Context), None
+    
+    def OredBy(self, other):
+        if isinstance(other, Number): return Number(int(self.Value or other.Value)).SetContext(self.Context), None
+
+    def Notted(self, other):
+        if isinstance(other, Number): return Number(1 if self.Value == 0 else 0).SetContext(self.Context), None
+
     def __repr__(self):
         return str(self.Value)
 
@@ -688,12 +717,12 @@ class Interpreter:
         elif node.OperatorToken.Type == TT_DIV: result, error = left.DivedBy(right)
         elif node.OperatorToken.Type == TT_POW: result, error = left.PowedBy(right)
         #   comparison
-        elif node.OperatorToken.Type == TT_EE: result, error = left.ComparisonEq(right)
-        elif node.OperatorToken.Type == TT_NE: result, error = left.ComparisonNE(right)
-        elif node.OperatorToken.Type == TT_LT: result, error = left.ComparisonLT(right)
-        elif node.OperatorToken.Type == TT_GT: result, error = left.ComparisonGT(right)
-        elif node.OperatorToken.Type == TT_LTE: result, error = left.ComparisonLTE(right)
-        elif node.OperatorToken.Type == TT_GTE: result, error = left.ComparisonGTE(right)
+        elif node.OperatorToken.Type == TT_EE: result, error = left.GetComparisonEq(right)
+        elif node.OperatorToken.Type == TT_NE: result, error = left.GetComparisonNE(right)
+        elif node.OperatorToken.Type == TT_LT: result, error = left.GetComparisonLT(right)
+        elif node.OperatorToken.Type == TT_GT: result, error = left.GetComparisonGT(right)
+        elif node.OperatorToken.Type == TT_LTE: result, error = left.GetComparisonLTE(right)
+        elif node.OperatorToken.Type == TT_GTE: result, error = left.GetComparisonGTE(right)
         elif node.OperatorToken.Matches(TT_KEYWORD, 'and'): result, error = left.AndedBy(right)
         elif node.OperatorToken.Matches(TT_KEYWORD, 'or'): result, error = left.OredBy(right)
 
@@ -707,7 +736,8 @@ class Interpreter:
 
         error = None
 
-        if node.OperatorToken == TT_MINUS: number = number.MultedBy(Number(-1))
+        if node.OperatorToken == TT_MINUS: number, error = number.MultedBy(Number(-1))
+        elif node.OperatorToken.Matches(TT_KEYWORD, 'not'): number, error = number.Notted()
 
         if error: return runTimeError.Failure(error)
         else: return runTimeError.Success(number.SetPosition(node.PosStart, node.PosEnd))
@@ -719,6 +749,8 @@ class Interpreter:
 
 GlobalSymbolTable = SymbolTable()
 GlobalSymbolTable.Set('null', Number(0))
+GlobalSymbolTable.Set('false', Number(0))
+GlobalSymbolTable.Set('true', Number(1))
 
 def Run(fileName, text):
     lexer = Lexer(fileName, text)
