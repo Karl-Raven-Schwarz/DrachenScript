@@ -5,4 +5,4 @@ while True:
     result, error = drachenScript.Run("<stdin>", text)
     
     if error: print(error.AsString())
-    else: print(result)
+    elif result: print(result)

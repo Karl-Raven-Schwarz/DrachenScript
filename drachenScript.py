@@ -1,98 +1,29 @@
-from stringWithArrows import *
+from StringWithArrows import *
 import string
-
+from Position import *
+from Error import *
 ''''
     CONSTANTS
 '''
 
+leftKey = r'\{'
+
 DIGITS = '0123456789'
 LETTERS = string.ascii_letters
 LETTERS_DIGITS = LETTERS + DIGITS
+GRAMMAR_SIGNS = f"_:{'{'}"
+print(GRAMMAR_SIGNS)
+
+
+
 
 ''''
     ERRORS
 '''
 
-class Error:
-
-    def __init__(self, posStart, posEnd, errorName, details):
-        self.PosStart = posStart
-        self.PosEnd = posEnd
-        self.ErrorName = errorName
-        self.Details = details
-
-    def AsString(self):
-        result = f'{self.ErrorName}: {self.Details}\n'
-        result += f'File {self.PosStart.FileName}, line {self.PosStart.Line + 1}'
-        result += '\n\n' + StringWithArrows(self.PosStart.FileTxt, self.PosStart, self.PosEnd)
-        return result
-
-class IllegalCharError(Error):
-
-    def __init__(self, posStart, posEnd, details):
-        super().__init__(posStart, posEnd, 'Illegal Character', details)
-
-class ExpectedCharError(Error):
-    
-    def __init__(self, posStart, posEnd, details):
-        super().__init__(posStart, posEnd, 'Expected Character', details)
-
-class InvalidSyntaxError(Error):
-
-    def __init__(self, posStart, posEnd, details=''):
-        super().__init__(posStart, posEnd, 'Invalid Syntax', details)
-
-class RunTimeError(Error):
-
-    def __init__(self, posStart, posEnd, details, context):
-        super().__init__(posStart, posEnd, 'Run Time Error', details)
-        self.Context = context
-
-    def AsString(self):
-        result = self.GenerateTraceback()
-        result += f'File {self.ErrorName}, {self.Details}'
-        result += '\n\n' + StringWithArrows(self.PosStart.FileTxt, self.PosStart, self.PosEnd)
-        return result
-
-    def GenerateTraceback(self):
-        result = ''
-        position = self.PosStart
-        context = self.Context
-
-        while context:
-            result = f' File {position.FileName}, line {str(position.Line + 1)}, in {context.DisplayName} \n' + result
-            position = context.ParentEntryPosition
-            context = context.Parent
-        
-        return 'Traceback (most recent call last):\n' + result
-
-
-
 '''
     POSITION
 '''
-
-class Position:
-
-    def __init__(self, index, line, column, fileName, fileTxt):
-        self.Index = index
-        self.Line = line
-        self.Column = column
-        self.FileName = fileName
-        self.FileTxt = fileTxt
-
-    def Advance(self, currentChar=None):
-        self.Index += 1
-        self.Column += 1
-
-        if currentChar == '\n':
-            self.Line += 1
-            self.Column = 0
-        
-        return self
-    
-    def Copy(self):
-        return Position(self.Index, self.Line, self.Column, self.FileName, self.FileTxt)
 
 ''''
     TOKENS
@@ -120,7 +51,7 @@ TT_LTE = 'LTE'
 TT_GTE = 'GTE'
 
 KEYWORDS = [
-    'var', 'and', 'or', 'not'
+    'var', 'and', 'or', 'not', 'if', '{', 'elif', 'else', 'for', 'to', 'step', 'while' 
 ]
 
 class Token:
@@ -170,7 +101,7 @@ class Lexer:
             elif self.CurrentChar in DIGITS:
                 tokens.append(self.MakeNumber())
 
-            elif self.CurrentChar in LETTERS:
+            elif self.CurrentChar in LETTERS + GRAMMAR_SIGNS:
                 tokens.append(self.MakeIdentifier())
 
             elif self.CurrentChar == '+':
@@ -231,8 +162,7 @@ class Lexer:
             if self.CurrentChar == '.':
                 if dotCount == 1: break
                 dotCount += 1
-                NumStr += '.'
-            else: NumStr += self.CurrentChar
+            NumStr += self.CurrentChar
             self.Advance()
 
         if dotCount == 0: return Token(TT_INT, int(NumStr), posStart, self.Position)
@@ -243,7 +173,7 @@ class Lexer:
         idStr = ''
         posStart = self.Position.Copy()
 
-        while self.CurrentChar != None and self.CurrentChar in LETTERS_DIGITS + '_':
+        while self.CurrentChar != None and self.CurrentChar in LETTERS_DIGITS + GRAMMAR_SIGNS:
             idStr += self.CurrentChar
             self.Advance()
         
@@ -349,6 +279,35 @@ class UnaryOperatorNode:
     def __repr__(self):
         return f'({self.OperatorToken}, {self.Node})'
 
+class IfNode:
+
+    def __init__(self, cases, elseCase):
+        self.Cases = cases
+        self.ElseCase = elseCase
+        self.PosStart = self.Cases[0][0].PosStart
+        self.PosEnd = (self.ElseCase or self.Cases[len(self.Cases) - 1][0]).PosEnd
+
+class ForNode:
+
+    def __init__(self, varNameToken, startValueNode, endValueNode, stepValueNode, bodyNode):
+        self.VarNameToken = varNameToken
+        self.StartValueNode = startValueNode
+        self.EndValueNode = endValueNode
+        self.StepValueNode = stepValueNode
+        self.BodyNode = bodyNode
+
+        self.PosStart = self.VarNameToken.PosStart
+        self.PosEnd = self.BodyNode.PosEnd
+
+class WhileNode:
+
+    def __init__(self, conditionNode, bodyNode):
+        self.ConditionNode = conditionNode
+        self.BodyNode = bodyNode
+
+        self.PosStart = self.ConditionNode.PosStart
+        self.PosEnd = self.BodyNode.PosEnd
+
 '''
     PARSE RESULT
 '''
@@ -402,6 +361,165 @@ class Parser:
             ))
         return result
 
+###################################################
+
+    def IfExpr(self):
+        parseResult = ParseResult()
+        cases = []
+        elseCase = None
+
+        if not self.CurrentToken.Matches(TT_KEYWORD, 'if'):
+            return parseResult.Failure(InvalidSyntaxError(
+                self.CurrentToken.PosStart, self.CurrentToken.PosEnd, f"Expected 'if'"
+            ))
+        
+        parseResult.RegisterAdvancement()
+        self.Advance()
+
+        condition = parseResult.Register(self.Expr())
+
+        if parseResult.Error: return parseResult
+
+        if not self.CurrentToken.Matches(TT_KEYWORD, '{'):
+            return parseResult.Failure(InvalidSyntaxError(
+                self.CurrentToken.PosStart, self.CurrentToken.PosEnd, f"Expected {'{'} (then)"
+            ))
+        
+        parseResult.RegisterAdvancement()
+        self.Advance()
+
+        expr = parseResult.Register(self.Expr())
+
+        if parseResult.Error: return parseResult
+
+        cases.append((condition, expr))
+
+        while self.CurrentToken.Matches(TT_KEYWORD, 'elif'):
+            parseResult.RegisterAdvancement()
+            self.Advance()
+            condition = parseResult.Register(self.Expr())
+
+            if parseResult.Error: return parseResult
+
+            if not self.CurrentToken.Matches(TT_KEYWORD, '{'):
+                return parseResult.Failure(InvalidSyntaxError(
+                    self.CurrentToken.PosStart, self.CurrentToken.PosEnd, f"Expected {'{'}"
+                ))
+            
+            parseResult.RegisterAdvancement()
+            self.Advance()
+            expr = parseResult.Register(self.Expr())
+
+            if parseResult.Error: return parseResult
+
+            cases.append((condition, expr))
+        
+        if self.CurrentToken.Matches(TT_KEYWORD, 'else'):
+            parseResult.RegisterAdvancement()
+            self.Advance()
+            expr = parseResult.Register(self.Expr())
+
+            if parseResult.Error: return parseResult
+
+            elseCase = expr
+        
+        return parseResult.Success(IfNode(cases, elseCase))
+
+    def ForExpr(self):
+        parseResult = ParseResult()
+
+        if not self.CurrentToken.Matches(TT_KEYWORD, 'for'):
+            return parseResult.Failure(InvalidSyntaxError(
+                    self.CurrentToken.PosStart, self.CurrentToken.PosEnd, f"Expected 'for'"
+                ))
+        
+        parseResult.RegisterAdvancement()
+        self.Advance()
+
+        if parseResult.Error: return parseResult
+
+        if self.CurrentToken.Type != TT_IDENTIFIER:
+            return parseResult.Failure(InvalidSyntaxError(
+                self.CurrentToken.PosStart, self.CurrentToken.PosEnd, f"Expected identifier"
+            ))
+        
+        varName = self.CurrentToken
+        parseResult.RegisterAdvancement()
+        self.Advance()
+
+        if self.CurrentToken.Type != TT_EQUAL:
+            return parseResult.Failure(InvalidSyntaxError(
+                self.CurrentToken.PosStart, self.CurrentToken.PosEnd, f"Expected '='"
+            ))
+        
+        parseResult.RegisterAdvancement()
+        self.Advance()
+
+        startValue = parseResult.Register(self.Expr())
+
+        if parseResult.Error: return parseResult
+
+        if not self.CurrentToken.Matches(TT_KEYWORD, 'to'):
+            return parseResult.Failure(InvalidSyntaxError(
+                self.CurrentToken.PosStart, self.CurrentToken.PosEnd, f"Expected 'to'"
+            ))
+        
+        parseResult.RegisterAdvancement()
+        self.Advance()
+
+        endValue = parseResult.Register(self.Expr())
+        
+        if parseResult.Error: return parseResult
+
+        if self.CurrentToken.Matches(TT_KEYWORD, 'step'):
+            parseResult.RegisterAdvancement()
+            self.Advance()
+            stepValue = parseResult.Register(self.Expr())
+
+            if parseResult.Error: return parseResult
+
+        else: stepValue = None
+
+        if not self.CurrentToken.Matches(TT_KEYWORD, '{'):
+            return parseResult.Failure(InvalidSyntaxError(
+                self.CurrentToken.PosStart, self.CurrentToken.PosEnd, f"Expected {'{'}"
+            ))
+        
+        parseResult.RegisterAdvancement()
+        self.Advance()
+        body = parseResult.Register(self.Expr())
+        
+        if parseResult.Error: return parseResult
+
+        return parseResult.Success(ForNode(varName, startValue, endValue, stepValue, body))
+        
+    def WhileExpr(self):
+        parseResult = ParseResult()
+
+        if not self.CurrentToken.Matches(TT_KEYWORD, 'while'):
+            return parseResult.Failure(InvalidSyntaxError(
+                self.CurrentToken.PosStart, self.CurrentToken.PosEnd, f"Expected 'while'"
+            ))
+        
+        parseResult.RegisterAdvancement()
+        self.Advance()
+        condition = parseResult.Register(self.Expr())
+
+        if parseResult.Error: return parseResult
+
+        if not self.CurrentToken.Matches(TT_KEYWORD, '{'):
+            return parseResult.Failure(InvalidSyntaxError(
+                self.CurrentToken.PosStart, self.CurrentToken.PosEnd, f"Expected {'{'}"
+            ))
+        
+        parseResult.RegisterAdvancement()
+        self.Advance()
+        body = parseResult.Register(self.Expr())
+
+        if parseResult.Error: return parseResult
+
+        return parseResult.Success(WhileNode(condition, body))
+
     def Atom(self):
         result = ParseResult()
         token = self.CurrentToken
@@ -420,7 +538,9 @@ class Parser:
             result.RegisterAdvancement()
             self.Advance()
             expr = result.Register(self.Expr())
+            
             if result.Error: return result
+            
             if self.CurrentToken.Type == TT_RPAREN:
                 result.RegisterAdvancement()
                 self.Advance()
@@ -430,6 +550,27 @@ class Parser:
                     self.CurrentToken.PosStart, self.CurrentToken.PosEnd, "Expected ')'"
                 ))
         
+        elif token.Matches(TT_KEYWORD, 'if'):
+            ifExpr = result.Register(self.IfExpr())
+        
+            if result.Error: return result
+
+            return result.Success(ifExpr)
+        
+        elif token.Matches(TT_KEYWORD, 'for'):
+            forExpr = result.Register(self.ForExpr())
+        
+            if result.Error: return result
+
+            return result.Success(forExpr)
+        
+        elif token.Matches(TT_KEYWORD, 'while'):
+            whileExpr = result.Register(self.WhileExpr())
+        
+            if result.Error: return result
+
+            return result.Success(whileExpr)
+
         return result.Failure(InvalidSyntaxError(
             token.PosStart, token.PosEnd, "Expected int, float, identifier, '+', '-', or '('"
         ))
@@ -630,6 +771,9 @@ class Number:
         copy.SetContext(self.Context)
         return copy
 
+    def IsTrue(self):
+        return self.Value != 0
+
     def __repr__(self):
         return str(self.Value)
     
@@ -733,18 +877,90 @@ class Interpreter:
         else: return runTimeResult.Success(result.SetPosition(node.PosStart, node.PosEnd))
         
     def VisitUnaryOperatorNode(self, node, context):
-        runTimeError = RunTimeError()
-        number = runTimeError.Register(self.Visit(node.Node, context))
-        if runTimeError.Error: return runTimeError
+        rTResult = RunTimeResult()
+        number = rTResult.Register(self.Visit(node.Node, context))
+        if rTResult.Error: return rTResult
 
         error = None
 
-        if node.OperatorToken == TT_MINUS: number, error = number.MultedBy(Number(-1))
-        elif node.OperatorToken.Matches(TT_KEYWORD, 'not'): number, error = number.Notted()
+        if node.OperatorToken.Type == TT_MINUS: 
+            number, error = number.MultedBy(Number(-1))
+        elif node.OperatorToken.Matches(TT_KEYWORD, 'not'): 
+            number, error = number.Notted()
 
-        if error: return runTimeError.Failure(error)
-        else: return runTimeError.Success(number.SetPosition(node.PosStart, node.PosEnd))
+        if error: return rTResult.Failure(error)
+        else: return rTResult.Success(number.SetPosition(node.PosStart, node.PosEnd))
 
+    def VisitIfNode(self, node, context):
+        rTResult = RunTimeResult()
+        
+        for condition, expr in node.Cases:
+            conditionValue = rTResult.Register(self.Visit(condition, context))
+
+            if rTResult.Error: return rTResult
+
+            if conditionValue.IsTrue():
+                exprValue = rTResult.Register(self.Visit(expr, context))
+
+                if rTResult.Error: return rTResult
+
+                return rTResult.Success(exprValue)
+        
+        if node.ElseCase:
+            elseValue = rTResult.Register(self.Visit(node.ElseCase, context))
+
+            if rTResult.Error: return rTResult
+
+            return rTResult.Success(elseValue)
+        
+        return rTResult.Success(None)
+
+    def VisitForNode(self, node, context):
+        rTResult = RunTimeResult()
+        startValue = rTResult.Register(self.Visit(node.StartValueNode, context))
+
+        if rTResult.Error: return rTResult
+
+        endValue = rTResult.Register(self.Visit(node.EndValueNode, context))
+        
+        if rTResult.Error: return rTResult
+
+        if node.StepValueNode:
+            stepValue = rTResult.Register(self.Visit(node.StepValueNode, context))
+
+            if rTResult.Error: return rTResult
+
+        else: stepValue = Number(1)
+
+        i = startValue.Value
+
+        if stepValue.Value >= 0: condition = lambda: i < endValue.Value
+        else: condition = lambda: i > endValue.Value
+
+        while condition():
+            context.SymbolTable.Set(node.VarNameToken.Value, Number(i))
+            i += stepValue.Value
+            rTResult.Register(self.Visit(node.BodyNode, context))
+
+            if rTResult.Error: return rTResult
+
+        return rTResult.Success(None)
+
+    def VisitWhileNode(self, node, context):
+        rTResult = RunTimeResult()
+
+        while True:
+            condition = rTResult.Register(self.Visit(node.ConditionNode, context))
+
+            if rTResult.Error: return rTResult
+
+            if not condition.IsTrue(): break
+
+            rTResult.Register(self.Visit(node.BodyNode, context))
+
+            if rTResult.Error: return rTResult
+        
+        return rTResult.Success(None)
 
 '''
     RUN
@@ -772,4 +988,3 @@ def Run(fileName, text):
     result = interpreter.Visit(ast.Node, context)
 
     return result.Value, result.Error
-
