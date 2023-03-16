@@ -13,11 +13,14 @@ factor          : (PLUS|MINUS) factor
 
 power           : atom (POW factor)*
 
+call            : atom (LPAREN (expr (COMMA expr)*)? RPAREN)?
+
 atom            : INT|FLOAT|IDENTIFIER
                 : LPAREN expr RPAREN
                 : if-expr
                 : for-expr
                 : while-expr
+                : func-def
 
 if-expr         : KEYWORD : IF expr KEYWORD : ':' expr
                  (KEYWORD : ELIF expr KEYWORD : ':' expr)*
@@ -26,4 +29,8 @@ if-expr         : KEYWORD : IF expr KEYWORD : ':' expr
 for-expr        : KEYWORD : FOR IDENTIFIER EQ expr KEYWORD : TO expr
                  (KEYWORD : STEP expr)? KEYWORD : ':' expr
 
-while-expr       KEYWORD : WHILE expr KEYWORD : ':' expr
+while-expr      : KEYWORD : WHILE expr KEYWORD : ':' expr
+
+func-def        : KEYWORD FUNC IDENTIFIER?
+                 LPAREN (IDENTIFIER (COMMA IDENTIFIER)*)? RPAREN
+                 ARRPW expr

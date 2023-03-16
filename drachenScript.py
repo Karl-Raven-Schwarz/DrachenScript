@@ -1,79 +1,8 @@
 from StringWithArrows import *
-import string
 from Position import *
 from Error import *
-''''
-    CONSTANTS
-'''
+from Token import *
 
-leftKey = r'\{'
-
-DIGITS = '0123456789'
-LETTERS = string.ascii_letters
-LETTERS_DIGITS = LETTERS + DIGITS
-GRAMMAR_SIGNS = f"_:{'{'}"
-print(GRAMMAR_SIGNS)
-
-
-
-
-''''
-    ERRORS
-'''
-
-'''
-    POSITION
-'''
-
-''''
-    TOKENS
-'''
-
-TT_INT = 'INT'
-TT_FLOAT = 'FLOAT'
-TT_PLUS = 'PLUS'
-TT_MINUS = 'MINUS'
-TT_MUL = 'MUL'
-TT_DIV = 'DIV'
-TT_POW = 'POW'
-TT_LPAREN = 'LPAREN'
-TT_RPAREN = 'RPAREN'
-TT_EOF = 'EOF' #    end or final
-TT_IDENTIFIER = 'IDENTIFIER'
-TT_KEYWORD = 'KEYWORD'
-TT_EQUAL = 'EQUAL'
-#   logical operators
-TT_EE = 'EE'
-TT_NE = 'NE'
-TT_LT = 'LT'
-TT_GT = 'GT'
-TT_LTE = 'LTE'
-TT_GTE = 'GTE'
-
-KEYWORDS = [
-    'var', 'and', 'or', 'not', 'if', '{', 'elif', 'else', 'for', 'to', 'step', 'while' 
-]
-
-class Token:
-
-    def __init__(self, type, value=None, posStart=None, posEnd=None):
-        self.Type = type
-        self.Value = value
-
-        if posStart:
-            self.PosStart = posStart.Copy()
-            self.PosEnd = posStart.Copy()
-            self.PosEnd.Advance()
-
-        if posEnd: self.PosEnd = posEnd.Copy()
-
-    def Matches(self, type, value):
-        return self.Type == type and self.Value == value
-
-    def __repr__(self):
-        if self.Value: return f'{self.Type}:{self.Value}'
-        return f'{self.Type}'
-    
 ''''
     LEXER
 '''
@@ -138,11 +67,17 @@ class Lexer:
                 tokens.append(token)
 
             elif self.CurrentChar == '=':
-                tokens.append(self.MakeEquals())
+                tokens.append(self.MakeEqualsOrArrow())
+
             elif self.CurrentChar == '<':
                 tokens.append(self.MakeLessThan())
+
             elif self.CurrentChar == '>':
                 tokens.append(self.MakeGreaterThan())
+
+            elif self.CurrentChar == ',':
+                tokens.append(Token(TT_COMMA, posStart=self.Position))
+                self.Advance()
 
             else: 
                 posStart = self.Position.Copy()
@@ -191,7 +126,7 @@ class Lexer:
         self.Advance()
         return None, ExpectedCharError(posStart, self.Position, "'=' (after '!')")
     
-    def MakeEquals(self):
+    def MakeEqualsOrArrow(self):
         tokenType = TT_EQUAL
         posStart = self.Position.Copy()
         self.Advance()
@@ -199,6 +134,9 @@ class Lexer:
         if self.CurrentChar == '=':
             self.Advance()
             tokenType = TT_EE
+        elif self.CurrentChar == '>':
+            self.Advance()
+            tokenType = TT_ARROW
 
         return Token(tokenType, posStart=posStart, posEnd=self.Position)
     
@@ -308,6 +246,34 @@ class WhileNode:
         self.PosStart = self.ConditionNode.PosStart
         self.PosEnd = self.BodyNode.PosEnd
 
+class FunctionDefinitionNode:
+
+    def __init__(self, varNameToken, argNameTokens, bodyNode):
+        self.VarNameToken = varNameToken
+        self.ArgNameTokens = argNameTokens
+        self.BodyNode = bodyNode
+
+        if self.VarNameToken:
+            self.PosStart = self.VarNameToken.PosStart
+        elif len(self.ArgNameTokens) > 0:
+            self.PosStart = self.ArgNameTokens[0].PosStart
+        else:
+            self.PosStart = self.BodyNode.PosStart
+
+        self.PosEnd = self.BodyNode.PosEnd
+
+class CallNode:
+
+    def __init__(self, nodeToCall, argNodes):
+        self.NodeToCall = nodeToCall
+        self.ArgNodes = argNodes
+        self.PosStart = self.NodeToCall.PosStart
+
+        if len(self.ArgNodes) > 0:
+            self.PosEnd = self.ArgNodes[len(self.ArgNodes) -1].PosEnd
+        else:
+            self.PosEnd = self.NodeToCall.PosEnd
+
 '''
     PARSE RESULT
 '''
@@ -317,12 +283,15 @@ class ParseResult:
     def __init__(self):
         self.Error = None
         self.Node = None
+        self.LastRegisteredAdvanceCount = 0
         self.AdvanceCount = 0
 
     def RegisterAdvancement(self):
+        self.LastRegisteredAdvanceCount = 1
         self.AdvanceCount += 1
 
     def Register(self, result):
+        self.LastRegisteredAdvanceCount = result.AdvanceCount
         self.AdvanceCount += result.AdvanceCount
         if result.Error: self.Error = result.Error
         return result.Node
@@ -332,7 +301,7 @@ class ParseResult:
         return self
 
     def Failure(self, error):
-        if not self.Error or self.AdvanceCount == 0:
+        if not self.Error or self.LastRegisteredAdvanceCount == 0:
             self.Error = error
         return self
 
@@ -520,63 +489,189 @@ class Parser:
 
         return parseResult.Success(WhileNode(condition, body))
 
+    def FunctionDefinition(self):
+        parseResult = ParseResult()
+        
+        if not self.CurrentToken.Matches(TT_KEYWORD, 'func'):
+            return parseResult.Failure(InvalidSyntaxError(
+                self.CurrentToken.PosStart, self.CurrentToken.PosEnd, f"Expected 'func'"
+            ))
+        
+        parseResult.RegisterAdvancement()
+        self.Advance()
+
+        if self.CurrentToken.Type == TT_IDENTIFIER:
+            varNameToken = self.CurrentToken
+            parseResult.RegisterAdvancement()
+            self.Advance()
+
+            if self.CurrentToken.Type != TT_LPAREN:
+                return parseResult.Failure(InvalidSyntaxError(
+                    self.CurrentToken.PosStart, self.CurrentToken.PosEnd, f"Expected '('"
+                ))
+            
+        else: 
+            varNameToken = None
+
+            if self.CurrentToken.Type != TT_LPAREN:
+                return parseResult.Failure(InvalidSyntaxError(
+                    self.CurrentToken.PosStart, self.CurrentToken.PosEnd, f"Expected Identifier or '('"
+                ))
+                
+            parseResult.RegisterAdvancement()
+            self.Advance()
+            argNameTokens = []
+
+            if self.CurrentToken.Type == TT_IDENTIFIER:
+                argNameTokens.append(self.CurrentToken)
+                parseResult.RegisterAdvancement()
+                self.Advance()
+
+                while self.CurrentToken.Type == TT_COMMA:
+                    parseResult.RegisterAdvancement()
+                    self.Advance()
+
+                    if self.CurrentToken.Type != TT_IDENTIFIER:
+                        return parseResult.Failure(InvalidSyntaxError(
+                            self.CurrentToken.PosStart, self.CurrentToken.PosEnd, f"Expected Identifier"
+                        ))
+                    
+                    argNameTokens.append(self.CurrentToken)
+                    parseResult.RegisterAdvancement()
+                    self.Advance()
+
+                if self.CurrentToken.Type != TT_RPAREN:
+                    return parseResult.Failure(InvalidSyntaxError(
+                            self.CurrentToken.PosStart, self.CurrentToken.PosEnd, f"Expected ',' or ')'"
+                        ))
+                
+            else:
+                if self.CurrentToken.Type != TT_RPAREN:
+                    return parseResult.Failure(InvalidSyntaxError(
+                            self.CurrentToken.PosStart, self.CurrentToken.PosEnd, f"Expected Identifier or ')'"
+                        ))
+                
+            parseResult.RegisterAdvancement()
+            self.Advance()
+
+            if self.CurrentToken.Type != TT_ARROW:
+                return parseResult.Failure(InvalidSyntaxError(
+                        self.CurrentToken.PosStart, self.CurrentToken.PosEnd, f"Expected '=>'"
+                    ))
+            
+            parseResult.RegisterAdvancement()
+            self.Advance()
+            nodeToReturn = parseResult.Register(self.Expr())
+
+            if parseResult.Error: return parseResult
+
+            return parseResult.Success(FunctionDefinitionNode(varNameToken, argNameTokens, nodeToReturn))
+
     def Atom(self):
-        result = ParseResult()
+        parseResult = ParseResult()
         token = self.CurrentToken
 
         if token.Type in (TT_INT, TT_FLOAT):
-            result.RegisterAdvancement()
+            parseResult.RegisterAdvancement()
             self.Advance()
-            return result.Success(NumberNode(token))
+            return parseResult.Success(NumberNode(token))
         
         elif token.Type == TT_IDENTIFIER:
-            result.RegisterAdvancement()
+            parseResult.RegisterAdvancement()
             self.Advance()
-            return result.Success(VarAccessNode(token))
+            return parseResult.Success(VarAccessNode(token))
 
         elif token.Type == TT_LPAREN:
-            result.RegisterAdvancement()
+            parseResult.RegisterAdvancement()
             self.Advance()
-            expr = result.Register(self.Expr())
+            expr = parseResult.Register(self.Expr())
             
-            if result.Error: return result
+            if parseResult.Error: return parseResult
             
             if self.CurrentToken.Type == TT_RPAREN:
-                result.RegisterAdvancement()
+                parseResult.RegisterAdvancement()
                 self.Advance()
-                return result.Success(expr)
+                return parseResult.Success(expr)
             else:
-                return result.Failure(InvalidSyntaxError(
+                return parseResult.Failure(InvalidSyntaxError(
                     self.CurrentToken.PosStart, self.CurrentToken.PosEnd, "Expected ')'"
                 ))
         
         elif token.Matches(TT_KEYWORD, 'if'):
-            ifExpr = result.Register(self.IfExpr())
-        
-            if result.Error: return result
+            ifExpr = parseResult.Register(self.IfExpr())
+            
+            if parseResult.Error: return parseResult
 
-            return result.Success(ifExpr)
+            return parseResult.Success(ifExpr)
         
         elif token.Matches(TT_KEYWORD, 'for'):
-            forExpr = result.Register(self.ForExpr())
-        
-            if result.Error: return result
+            forExpr = parseResult.Register(self.ForExpr())
+            
+            if parseResult.Error: return parseResult
 
-            return result.Success(forExpr)
+            return parseResult.Success(forExpr)
         
         elif token.Matches(TT_KEYWORD, 'while'):
-            whileExpr = result.Register(self.WhileExpr())
+            whileExpr = parseResult.Register(self.WhileExpr())
+            
+            if parseResult.Error: return parseResult
+
+            return parseResult.Success(whileExpr)
         
-            if result.Error: return result
+        elif token.Matches(TT_KEYWORD, 'func'):
+            functionDefinition = parseResult.Register(self.FunctionDefinition())
+            
+            if parseResult.Error: return parseResult
 
-            return result.Success(whileExpr)
+            return parseResult.Success(functionDefinition)
 
-        return result.Failure(InvalidSyntaxError(
-            token.PosStart, token.PosEnd, "Expected int, float, identifier, '+', '-', or '('"
+        return parseResult.Failure(InvalidSyntaxError(
+            token.PosStart, token.PosEnd, "Expected int, float, identifier, '+', '-', '(', 'if', 'for', 'while', 'func'"
         ))
 
     def Power(self):
-        return self.BinOperator(self.Atom, (TT_POW, ), self.Factor)
+        return self.BinOperator(self.Call, (TT_POW, ), self.Factor)
+        #return self.BinOperator(self.Atom, (TT_POW, ), self.Factor)
+
+    def Call(self):
+        parseResult = ParseResult()
+        atom = parseResult.Register(self.Atom())
+        if parseResult.Error: return parseResult
+
+        if self.CurrentToken.Type == TT_LPAREN:
+            parseResult.RegisterAdvancement()
+            self.Advance()
+            argNodes = []
+
+            if self.CurrentToken.Type == TT_RPAREN:
+                parseResult.RegisterAdvancement()
+                self.Advance()
+            
+            else:
+                argNodes.append(parseResult.Register(self.Expr()))
+
+                if parseResult.Error:
+                    return parseResult.Failure(InvalidSyntaxError(
+                        self.CurrentToken.PosStart, self.CurrentToken.PosEnd, f"Expected ')', 'var', 'if', 'for', 'while', int, float, Identifier, '+', '-', '(' or 'not'"
+                    ))
+                
+                while self.CurrentToken.Type == TT_COMMA:
+                    parseResult.RegisterAdvancement()
+                    self.Advance()
+                    argNodes.append(parseResult.Register(self.Expr()))
+
+                    if parseResult.Error: return parseResult
+
+                if self.CurrentToken.Type != TT_RPAREN:
+                    return parseResult.Failure(InvalidSyntaxError(
+                        self.CurrentToken.PosStart, self.CurrentToken.PosEnd, f"Expected ',' or ')'"
+                    ))
+                
+                parseResult.RegisterAdvancement()
+                self.Advance()
+            return parseResult.Success(CallNode(atom, argNodes))
+            
+        return parseResult.Success(atom)
 
     def Factor(self):
         result = ParseResult()
@@ -650,7 +745,7 @@ class Parser:
         node = result.Register(self.BinOperator(self.ComparisonExpr, ((TT_KEYWORD, 'and'), (TT_KEYWORD, 'or'))))
 
         if result.Error: return result.Failure(InvalidSyntaxError(
-                self.CurrentToken.PosStart, self.CurrentToken.PosEnd,"Expected 'VAR', int, float, identifier, '+', '-', or '('"
+                self.CurrentToken.PosStart, self.CurrentToken.PosEnd,"Expected 'var', int, float, identifier, '+', '-', '(' or 'not'"
                 ))
         
         return result.Success(node)
@@ -700,13 +795,12 @@ class RunTimeResult:
     VALUES
 '''
 
-class Number:
+class Value:
 
-    def __init__(self, value):
-        self.Value = value
+    def __init__(self):
         self.SetPosition()
         self.SetContext()
-
+    
     def SetPosition(self, posStart=None, posEnd=None):
         self.PosStart = posStart
         self.PosEnd = posEnd
@@ -717,16 +811,83 @@ class Number:
         return self
 
     def AddedTo(self, other): 
+        return None, self.IllegalOperation(other)
+        
+    def SubbedBy(self, other):
+        return None, self.IllegalOperation(other)
+        
+    def MultedBy(self, other):
+        return None, self.IllegalOperation(other)
+        
+    def DivedBy(self, other):
+        return None, self.IllegalOperation(other)
+        
+    def PowedBy(self, other):
+        return None, self.IllegalOperation(other)
+
+    def GetComparisonEq(self, other):
+        return None, self.IllegalOperation(other)
+
+    def GetComparisonNE(self, other):
+        return None, self.IllegalOperation(other)
+
+    def GetComparisonLT(self, other):
+        return None, self.IllegalOperation(other)
+
+    def GetComparisonGT(self, other):
+        return None, self.IllegalOperation(other)
+
+    def GetComparisonLTE(self, other):
+        return None, self.IllegalOperation(other)
+
+    def GetComparisonGTE(self, other):
+        return None, self.IllegalOperation(other)
+
+    def AndedBy(self, other):
+        return None, self.IllegalOperation(other)
+    
+    def OredBy(self, other):
+        return None, self.IllegalOperation(other)
+
+    def Notted(self, other):
+        return None, self.IllegalOperation(other)
+
+    def Execute(self, args):
+        return RunTimeResult().Failure(self.IllegalOperation())
+
+    def Copy(self):
+        raise Exception('No copy method defined')
+
+    def IsTrue(self):
+        return False
+
+    def IllegalOperation(self, other=None):
+        if not other: other = self
+        return RunTimeError( self.PosStart, other.PosEnd, 'Illegal operation', self.Context)
+
+class Number(Value):
+
+    def __init__(self, value):
+        super().__init__()
+        self.Value = value
+
+    def AddedTo(self, other): 
         if isinstance(other, Number):
             return Number(self.Value + other.Value).SetContext(self.Context), None
+        else:
+            return None, Value.IllegalOperation(self, other)
         
     def SubbedBy(self, other):
         if isinstance(other, Number):
             return Number(self.Value - other.Value).SetContext(self.Context), None
+        else:
+            return None, Value.IllegalOperation(self, other)
         
     def MultedBy(self, other):
         if isinstance(other, Number):
             return Number(self.Value * other.Value).SetContext(self.Context), None
+        else:
+            return None, Value.IllegalOperation(self, other)
         
     def DivedBy(self, other):
         if isinstance(other, Number):
@@ -734,36 +895,65 @@ class Number:
                     other.PosStart, other.PosEnd, "Division by zero '0'", self.Context
             )
             return Number(self.Value / other.Value).SetContext(self.Context), None
+        else:
+            return None, Value.IllegalOperation(self, other)
         
     def PowedBy(self, other):
-        if isinstance(other, Number): return Number(self.Value**other.Value).SetContext(self.Context), None
+        if isinstance(other, Number): 
+            return Number(self.Value**other.Value).SetContext(self.Context), None
+        else:
+            return None, Value.IllegalOperation(self, other)
 
     def GetComparisonEq(self, other):
-        if isinstance(other, Number): return Number(int(self.Value == other.Value)).SetContext(self.Context), None
+        if isinstance(other, Number): 
+            return Number(int(self.Value == other.Value)).SetContext(self.Context), None
+        else:
+            return None, Value.IllegalOperation(self, other)
 
     def GetComparisonNE(self, other):
-        if isinstance(other, Number): return Number(int(self.Value != other.Value)).SetContext(self.Context), None
+        if isinstance(other, Number): 
+            return Number(int(self.Value != other.Value)).SetContext(self.Context), None
+        else:
+            return None, Value.IllegalOperation(self, other)
 
     def GetComparisonLT(self, other):
-        if isinstance(other, Number): return Number(int(self.Value < other.Value)).SetContext(self.Context), None
+        if isinstance(other, Number): 
+            return Number(int(self.Value < other.Value)).SetContext(self.Context), None
+        else:
+            return None, Value.IllegalOperation(self, other)
 
     def GetComparisonGT(self, other):
-        if isinstance(other, Number): return Number(int(self.Value > other.Value)).SetContext(self.Context), None
+        if isinstance(other, Number): 
+            return Number(int(self.Value > other.Value)).SetContext(self.Context), None
+        else:
+            return None, Value.IllegalOperation(self, other)
 
     def GetComparisonLTE(self, other):
-        if isinstance(other, Number): return Number(int(self.Value <= other.Value)).SetContext(self.Context), None
+        if isinstance(other, Number): 
+            return Number(int(self.Value <= other.Value)).SetContext(self.Context), None
+        else:
+            return None, Value.IllegalOperation(self, other)
 
     def GetComparisonGTE(self, other):
-        if isinstance(other, Number): return Number(int(self.Value >= other.Value)).SetContext(self.Context), None
+        if isinstance(other, Number): 
+            return Number(int(self.Value >= other.Value)).SetContext(self.Context), None
+        else:
+            return None, Value.IllegalOperation(self, other)
 
     def AndedBy(self, other):
-        if isinstance(other, Number): return Number(int(self.Value and other.Value)).SetContext(self.Context), None
+        if isinstance(other, Number): 
+            return Number(int(self.Value and other.Value)).SetContext(self.Context), None
+        else:
+            return None, Value.IllegalOperation(self, other)
     
     def OredBy(self, other):
-        if isinstance(other, Number): return Number(int(self.Value or other.Value)).SetContext(self.Context), None
+        if isinstance(other, Number): 
+            return Number(int(self.Value or other.Value)).SetContext(self.Context), None
+        else:
+            return None, Value.IllegalOperation(self, other)
 
-    def Notted(self, other):
-        if isinstance(other, Number): return Number(1 if self.Value == 0 else 0).SetContext(self.Context), None
+    def Notted(self):
+        return Number(1 if self.Value == 0 else 0).SetContext(self.Context), None
 
     def Copy(self):
         copy = Number(self.Value)
@@ -776,7 +966,51 @@ class Number:
 
     def __repr__(self):
         return str(self.Value)
-    
+
+class Function(Value):           
+        
+	def __init__(self, name, bodyNode, argNames):
+		super().__init__()
+		self.Name = name or "<anonymous>"
+		self.BodyNode = bodyNode
+		self.ArgNames = argNames
+
+	def Execute(self, args):
+		rTResult = RunTimeResult()
+		interpreter = Interpreter()
+		newContext = Context(self.Name, self.Context, self.PosStart)
+		newContext.SymbolTable = SymbolTable(newContext.Parent.SymbolTable)
+
+		if len(args) > len(self.ArgNames):
+			return rTResult.Failure(RunTimeError(
+				self.pos_start, self.PosEnd, f"{len(args) - len(self.ArgNames)} too many args passed into '{self.Name}'", self.Context
+			))
+		
+		if len(args) < len(self.ArgNames):
+			return rTResult.Failure(RunTimeError(self.PosStart, self.PosEnd, f"{len(self.ArgNames) - len(args)} too few args passed into '{self.Name}'"
+                , self.Context))
+                
+		for i in range(len(args)):
+			argName = self.ArgNames[i]
+			argValue = args[i]
+			argValue.SetContext(newContext)
+			newContext.SymbolTable.Set(argName, argValue)
+
+		value = rTResult.Register(interpreter.Visit(self.BodyNode, newContext))
+                
+		if rTResult.Error: return rTResult
+                
+		return rTResult.Success(value)
+
+	def Copy(self):
+		copy = Function(self.Name, self.BodyNode, self.ArgNames)
+		copy.SetContext(self.Context)
+		copy.SetPosition(self.PosStart, self.PosEnd)
+		return copy
+
+	def __repr__(self):
+		return f"<function {self.Name}>"
+
 '''
     CONTEXT
 '''
@@ -795,9 +1029,9 @@ class Context:
 
 class SymbolTable:
 
-    def __init__(self):
+    def __init__(self, parent=None):
         self.Symbols = {}
-        self.Parent = None
+        self.Parent = parent
 
     def Get(self, name):
         value = self.Symbols.get(name, None)
@@ -962,6 +1196,38 @@ class Interpreter:
         
         return rTResult.Success(None)
 
+    def VisitFunctionDefinitionNode(self, node, context):
+        rTResult = RunTimeResult()
+        functionName = node.VarNameToken.Value if node.VarNameToken else None
+        bodyNode = node.BodyNode
+        argNames = [argName.Value for argName in node.ArgNameTokens]
+        functionValue = Function(functionName, bodyNode, argNames).SetContext(context).SetPosition(node.PosStart, node.PosEnd)
+
+        if node.VarNameToken:
+            context.SumbolTable.Set(functionName, functionValue)
+
+        return rTResult.Success(functionValue)
+    
+    def VisitCallNode(self, node, context):
+        rTResult = RunTimeResult()
+        args = []
+        valueToCall = rTResult.Register(self.Visit(node.NodeToCall, context))
+
+        if rTResult.Error: return rTResult
+
+        valueToCall = valueToCall.Copy().SetPosition(node.PosStart, node.PosEnd)
+
+        for argNode in node.ArgNodes:
+            args.append(rTResult.Register(self.Visit(argNode, context)))
+
+            if rTResult.Error: return rTResult
+        
+        returnValue = rTResult.Register(valueToCall.Execute(args))
+
+        if rTResult.Error: return rTResult
+
+        return rTResult.Success(returnValue)
+
 '''
     RUN
 '''
@@ -988,3 +1254,6 @@ def Run(fileName, text):
     result = interpreter.Visit(ast.Node, context)
 
     return result.Value, result.Error
+
+
+print("----------------------------")
